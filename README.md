@@ -7,8 +7,6 @@
 
 ## Getting Started
 1. [Join the forum](https://mcfam.forum/index.php?register/)
-1. <a href="https://mcfam.forum/index.php?register/" target="_blank">Join the
-   forum</a>
 2. [Join a team](https://mcfam.forum/index.php?threads/fma_trading_comp.exe.29/#post-61)
 3. Download your teams codebase.
 ### Unix (Linux/MacOS)
