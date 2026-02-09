@@ -145,28 +145,54 @@ class AlpacaBroker(Broker):
 
     @override
     def post_order(self, order: Order) -> None:
-        """Post an order with intelligent Buying Power and Shorting checks."""
-        
+        """
+        Post an order to Alpaca, handling long and short positions safely
+        with margin/buying power checks.
+        Positive quantity -> BUY (long or cover short)
+        Negative quantity -> SELL (short or close long)
+        """
+        account = self.trading_client.get_account()
+        cash = float(account.cash)
+        buying_power = float(account.buying_power)  # includes margin
+        current_price = order.price if order.price else 0.0  # fallback
+
+        # Determine side and quantity
+        if order.quantity == 0:
+            logger.info(f"Skipping zero-quantity order: {order}")
+            return
+
         if order.quantity > 0:
             alpaca_side = AlpacaOrderSideEnum.BUY
-            qty_magnitude = order.quantity
-        elif order.quantity < 0:
-            alpaca_side = AlpacaOrderSideEnum.SELL
-            qty_magnitude = abs(order.quantity)
+            qty_to_place = order.quantity
+            max_affordable = math.floor(buying_power / current_price * 0.95) if current_price > 0 else order.quantity
+            if qty_to_place > max_affordable:
+                logger.warning(f"Adjusting BUY order {order.symbol} from {qty_to_place} to {max_affordable} shares due to buying power")
+                qty_to_place = max_affordable
         else:
-            logger.info(f"Order quantity is zero, skipping: {order}")
+            alpaca_side = AlpacaOrderSideEnum.SELL
+            qty_to_place = abs(order.quantity)
+            # For shorting, max shortable depends on margin
+            max_shortable = math.floor(buying_power / current_price * 0.95) if current_price > 0 else qty_to_place
+            if qty_to_place > max_shortable:
+                logger.warning(f"Adjusting SHORT order {order.symbol} from {qty_to_place} to {max_shortable} shares due to margin")
+                qty_to_place = max_shortable
+
+        if qty_to_place <= 0:
+            logger.error(f"Order quantity for {order.symbol} reduced to zero, skipping order")
+            return
 
         market_order_request = MarketOrderRequest(
             symbol=order.symbol,
-            qty=qty_magnitude,
+            qty=qty_to_place,
             side=alpaca_side,
             time_in_force=TimeInForce.GTC,
-            client_order_id=order.id 
+            client_order_id=order.id
         )
 
         try:
             self.trading_client.submit_order(market_order_request)
             self._pending_orders[order.id] = order
+            logger.info(f"Submitted {alpaca_side.value} order for {qty_to_place} shares of {order.symbol}")
         except Exception as e:
             logger.error(f"{red}Error submitting order for {order.symbol}: {e}{reset}")
 

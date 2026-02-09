@@ -6,7 +6,8 @@ import pandas as pd
 
 from systrade.data import BarData
 from systrade.position import Position
-
+from systrade.feed import AlpacaLiveStockFeed
+from systrade.broker import AlpacaBroker
 
 class PortfolioActivity:
     """History of portfolio activity along with metrics"""
@@ -94,7 +95,7 @@ class Portfolio(PortfolioView):
     @override
     def cash(self) -> float:
         return self._cash
-
+    
     @override
     def asset_value(self) -> float:
         total = 0
@@ -171,3 +172,68 @@ class Portfolio(PortfolioView):
                 del self._current_positions[symbol]
 
         self._cash -= qty * price
+
+# --- Adapter Class to bridge Broker API with PortfolioView interface ---
+class LivePortfolioView(PortfolioView):
+    def __init__(self, broker: AlpacaBroker):
+        self._broker = broker
+        self._last_prices: dict[str, float] = {}
+        self._cash = cash
+
+    def update_prices(self, data: BarData):
+        """Called by the main loop when new data arrives."""
+        for sym, bar in data.items():
+            self._last_prices[sym] = bar.close
+        self._as_of_time = data.as_of
+
+    @override
+    def cash(self) -> float:
+        acct = self._broker.get_account_details()
+        return float(acct['cash'])
+
+    def buying_power() -> float:
+        acct = self._broker.get_account_details()
+        return float(acct['buying_power'])
+
+    @override
+    def asset_value(self) -> float:
+        acct = self._broker.get_account_details()
+        return float(acct['equity']) - self.cash()
+
+    @override
+    def asset_value_of(self, symbol: str) -> float:
+        pos = self._broker.trading_client.get_position(symbol)
+        return float(pos.market_value) if pos else 0.0
+
+    @override
+    def value(self) -> float:
+        acct = self._broker.get_account_details()
+        return float(acct['equity'])
+
+    @override
+    def as_of(self) -> datetime:
+        return getattr(self, '_as_of_time', datetime.now(ZoneInfo("UTC")))
+
+    @override
+    def is_invested(self) -> bool:
+        positions = self._broker.trading_client.get_all_positions()
+        return bool(positions)
+
+    @override
+    def is_invested_in(self, symbol: str) -> bool:
+        try:
+            self._broker.trading_client.get_position(symbol)
+            return True
+        except Exception:
+            return False
+
+    @override
+    def position(self, symbol) -> Position:
+        pos = self._broker.trading_client.get_position(symbol)
+        if not pos:
+            raise ValueError(f"Not invested in {symbol}")
+        return Position(symbol, float(pos.qty))
+
+    @override
+    def activity(self) -> None:
+        raise NotImplementedError("Activity tracking is done by the broker in live mode.")

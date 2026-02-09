@@ -1,8 +1,7 @@
 from systrade.broker import Broker
 from systrade.feed import Feed
-from systrade.portfolio import Portfolio, PortfolioView
+from systrade.portfolio import Portfolio, PortfolioView, LivePortfolioView
 from systrade.strategy import Strategy
-
 
 class Engine:
     """Orchestrator for the different components"""
@@ -41,5 +40,5 @@ class Engine:
             self._strategy.on_data(data)
 
     @property
-    def portfolio(self) -> PortfolioView:
+    def portfolio(self) -> LivePortfolioView:
         return self._portfolio
