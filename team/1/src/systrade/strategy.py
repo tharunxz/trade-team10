@@ -63,15 +63,19 @@ class Strategy(ABC):
         self._subscribe_hook(symbol)
 
     def post_market_order(self, symbol: str, quantity: float) -> None:
+        order_id = str(uuid.uuid4())
+
         """Post order to broker"""
         order = Order(
-            id=self._current_order_id,
+            #id=str(self._current_order_id)
+            id=str(order_id),
             symbol=symbol,
             quantity=quantity,
             type=OrderType.MARKET,
             submit_time=self.current_time,
         )
         self._current_order_id += 1
+
         self._post_order_hook(order)
 
     @abstractmethod

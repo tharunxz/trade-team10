@@ -29,92 +29,43 @@ logger = logging.getLogger(__name__)
 # Verbose dictionary-type config
 #+for custom logger.
 # Config file found in:
-# /.config/logger/config.json
+# /config/logger/config.json
 # (source: youtube.com/mCoding)
 def setup_logging():
-    config_file = pathlib.Path(".config/logger/config.json")
+    config_file = pathlib.Path("config/logger/config.json")
     with open(config_file) as f_in:
         config = json.load(f_in)
     logging.config.dictConfig(config)
+# initialize escape codes for
+#+color-coding logs
+red = "\033[31m"
+green = "\033[32m"
+yellow = "\033[33m"
+blue = "\033[34m"
+hl_red = "\033[41m"
+hl_green = "\033[42m"
+hl_yellow = "\033[43m"
+hl_blue = "\033[44m"
+reset = "\033[0m"
 # ---------------------
-
-
-# --- Adapter Class to bridge Broker API with PortfolioView interface ---
-class LivePortfolioView(PortfolioView):
-    def __init__(self, broker: AlpacaBroker):
-        self._broker = broker
-        self._last_prices: dict[str, float] = {}
-
-    def update_prices(self, data: BarData):
-        """Called by the main loop when new data arrives."""
-        for sym, bar in data.items():
-            self._last_prices[sym] = bar.close
-        self._as_of_time = data.as_of
-
-    @override
-    def cash(self) -> float:
-        acct = self._broker.get_account_details()
-        return float(acct['cash'])
-
-    @override
-    def asset_value(self) -> float:
-        acct = self._broker.get_account_details()
-        return float(acct['equity']) - self.cash()
-
-    @override
-    def asset_value_of(self, symbol: str) -> float:
-        pos = self._broker.trading_client.get_position(symbol)
-        return float(pos.market_value) if pos else 0.0
-
-    @override
-    def value(self) -> float:
-        acct = self._broker.get_account_details()
-        return float(acct['equity'])
-
-    @override
-    def as_of(self) -> datetime:
-        return getattr(self, '_as_of_time', datetime.now(ZoneInfo("UTC")))
-
-    @override
-    def is_invested(self) -> bool:
-        positions = self._broker.trading_client.get_all_positions()
-        return bool(positions)
-
-    @override
-    def is_invested_in(self, symbol: str) -> bool:
-        try:
-            self._broker.trading_client.get_position(symbol)
-            return True
-        except Exception:
-            return False
-
-    @override
-    def position(self, symbol) -> Position:
-        pos = self._broker.trading_client.get_position(symbol)
-        if not pos:
-            raise ValueError(f"Not invested in {symbol}")
-        return Position(symbol, float(pos.qty))
-
-    @override
-    def activity(self) -> None:
-        raise NotImplementedError("Activity tracking is done by the broker in live mode.")
-
 
 # -------  Momentum strategy -----------
 class MyMomentumStrategy(Strategy):
     """
-    A live trading adaptation of the Lab 5 Momentum Strategy.
+    Momentum strategy with long/short support.
+    Positive quantity = buy / close short
+    Negative quantity = sell / open short
     """
     def __init__(self, symbol: str) -> None:
         super().__init__()
         self.symbol = symbol
-        self.history = []
-        self.trading_records = []
+        self.history: list[float] = []
+        self.trading_records: list[dict] = []
         logger.info(f"Momentum Strategy initialized for {self.symbol}")
 
     @override
     def on_start(self) -> None:
-        """Called before first event is every received"""
+        """Subscribe to the symbol on strategy start"""
         self.subscribe(self.symbol)
 
     @override
@@ -136,7 +87,7 @@ class MyMomentumStrategy(Strategy):
                     # TODO =============================
                     # set quantity to most you can afford
                     qty = math.floor(self.portfolio.cash() / price)
-                    logger.info(f"Buy signal! Posting market order for {qty} shares of {self.symbol}")
+                    logger.info(f"{hl_green}Buy signal! Posting market order for {qty} shares of {self.symbol}{reset}")
                     self.post_market_order(self.symbol, quantity=qty)
                     self.order_pending = True
                     self._record_trade("BUY", qty, price)
@@ -144,7 +95,7 @@ class MyMomentumStrategy(Strategy):
                 elif sell_signal and self.portfolio.is_invested_in(self.symbol):
                     pos = self.portfolio.position(self.symbol)
                     if pos.qty > 0:
-                        logger.info(f"Sell signal! Closing position of {pos.qty} shares of {self.symbol}")
+                        logger.info(f"{hl_red}Sell signal! Closing position of {pos.qty} shares of {self.symbol}{reset}")
                         self.post_market_order(self.symbol, quantity=-pos.qty)
                         self.order_pending = True
                         self._record_trade("SELL", pos.qty, price)
@@ -182,7 +133,7 @@ def main():
     broker = AlpacaBroker()
     strategy = MyMomentumStrategy(symbol="SPY")
 
-    starting_cash = 100000.0
+    starting_cash = 1000000
     engine = Engine(feed=feed, broker=broker, strategy=strategy, cash=starting_cash)
 
     logger.info("Engine initialized. Starting run...")
@@ -194,7 +145,7 @@ def main():
     except KeyboardInterrupt:
         logger.info("Trading interrupted by user. Stopping engine.")
     except Exception as e:
-        logger.error(f"An unexpected error occurred: {e}")
+        logger.error(f"{hl_red}An unexpected error occurred: {e}{reset}")
 
     logger.info("Application stopped.")
 
