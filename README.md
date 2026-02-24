@@ -53,6 +53,7 @@ Export the environment variables to the terminal environment:
 ```bash
 export $(cat env.list)
 ```
+NOTE: theres a dummy env.list in the repo, just add your keys to it.
 
 Run the app:
 ```shell
