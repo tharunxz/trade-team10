@@ -5,32 +5,56 @@ Backtest strategies on historical 1-min data.
 Usage:
     python scripts/backtest.py --data data/history_1min.csv
     python scripts/backtest.py --data data/history_1min.csv --strategy regime
+    python scripts/backtest.py --data data/history_1min.csv --strategy alpha_vwap --params '{"leverage": 1.0}'
     python scripts/backtest.py --data data/history_1min.csv --sweep
 """
 
 import argparse
 import itertools
+import json
 import math
 from pathlib import Path
 
 import pandas as pd
 
 from systrade.broker import BacktestBroker
+from systrade.config import make_backtest_strategy, STARTING_CASH, STRATEGY_NAME
 from systrade.engine import Engine
 from systrade.feed import HistoricalFeed
 from systrade.history import FileHistoryProvider
 from systrade.portfolio import Portfolio
-from systrade.strategies.alpha_vwap import AlphaVWAPStrategy
-from systrade.strategies.vwap_mean_reversion import VWAPMeanReversionStrategy
-from systrade.strategies.regime_adaptive import RegimeAdaptiveStrategy
-
-STARTING_CASH = 1_000_000
+from systrade.strategies.registry import create_strategy, list_strategies
 
 
-def _compute_metrics(portfolio: Portfolio, strategy, label: dict) -> dict:
+def run_backtest(data_path: str, strategy_name: str | None = None, **strategy_params) -> dict:
+    """Run a backtest. Defaults to the active strategy from config."""
+    provider = FileHistoryProvider(path=data_path)
+    feed = HistoricalFeed(provider=provider)
+    broker = BacktestBroker()
+
+    if strategy_name is None:
+        strategy = make_backtest_strategy(**strategy_params)
+        strategy_name = STRATEGY_NAME
+    else:
+        strategy = create_strategy(strategy_name, **strategy_params)
+
+    portfolio = Portfolio(cash=STARTING_CASH, broker=broker)
+    engine = Engine(
+        feed=feed, broker=broker, strategy=strategy,
+        cash=STARTING_CASH, portfolio=portfolio,
+    )
+    engine.run()
+    return _compute_metrics(portfolio, strategy, strategy_name, strategy_params)
+
+
+def _compute_metrics(
+    portfolio: Portfolio, strategy, strategy_name: str, params: dict,
+) -> dict:
     """Extract performance metrics from a completed backtest."""
     activity = portfolio.activity()
     df = activity.df()
+
+    label = {"strategy": strategy_name, **params}
 
     if df.empty:
         return {**label, "total_return": 0.0, "max_drawdown": 0.0, "sharpe": 0.0, "trades": 0}
@@ -57,108 +81,71 @@ def _compute_metrics(portfolio: Portfolio, strategy, label: dict) -> dict:
     }
 
 
-def run_vwap(data_path: str, entry_z=2.5, exit_z=0.3, rolling_window=20) -> dict:
-    """Run VWAP mean reversion backtest."""
-    provider = FileHistoryProvider(path=data_path)
-    feed = HistoricalFeed(provider=provider)
-    broker = BacktestBroker()
-    strategy = VWAPMeanReversionStrategy(
-        entry_z=entry_z, exit_z=exit_z, rolling_window=rolling_window,
-    )
-    portfolio = Portfolio(cash=STARTING_CASH, broker=broker)
-    engine = Engine(feed=feed, broker=broker, strategy=strategy,
-                    cash=STARTING_CASH, portfolio=portfolio)
-    engine.run()
-    return _compute_metrics(
-        portfolio, strategy,
-        {"strategy": "vwap", "entry_z": entry_z, "exit_z": exit_z, "window": rolling_window},
-    )
+# ── Parameter sweeps ─────────────────────────────────────────────────
+
+SWEEP_GRIDS: dict[str, list[dict]] = {
+    "vwap": [
+        {"entry_z": ez, "exit_z": xz, "rolling_window": w}
+        for ez, xz, w in itertools.product(
+            [1.5, 2.0, 2.5], [0.3, 0.5, 0.7], [15, 20, 30],
+        )
+    ],
+    "regime": [
+        {"orb_bars": ob, "entry_z": ez, "breakout_z": bz,
+         "trailing_stop_pct": ts, "position_frac": pf}
+        for ob, ez, bz, ts, pf in itertools.product(
+            [3, 5, 10], [1.5, 2.0, 2.5], [3.0, 3.5, 4.0],
+            [0.003, 0.005, 0.01], [0.50, 0.80],
+        )
+    ],
+}
 
 
-def run_alpha_vwap(data_path: str, leverage: float = 2.0) -> dict:
-    """Run AlphaVWAP (gap scan + TWAP + HMM/FFT) backtest."""
-    provider = FileHistoryProvider(path=data_path)
-    feed = HistoricalFeed(provider=provider)
-    broker = BacktestBroker()
-    strategy = AlphaVWAPStrategy(leverage=leverage)
-    portfolio = Portfolio(cash=STARTING_CASH, broker=broker)
-    engine = Engine(feed=feed, broker=broker, strategy=strategy,
-                    cash=STARTING_CASH, portfolio=portfolio)
-    engine.run()
-    return _compute_metrics(
-        portfolio, strategy,
-        {"strategy": "alpha_vwap", "leverage": leverage},
-    )
+def sweep(data_path: str, strategy_name: str) -> list[dict]:
+    """Run parameter sweep for a strategy (if a grid is defined)."""
+    grid = SWEEP_GRIDS.get(strategy_name)
+    if grid is None:
+        print(f"No sweep grid defined for '{strategy_name}'. Running with defaults.")
+        result = run_backtest(data_path, strategy_name)
+        _print_result(result)
+        return [result]
 
-
-def run_regime(
-    data_path: str,
-    orb_bars: int = 5,
-    entry_z: float = 2.0,
-    breakout_z: float = 3.5,
-    trailing_stop_pct: float = 0.005,
-    position_frac: float = 0.80,
-) -> dict:
-    """Run regime-adaptive backtest."""
-    provider = FileHistoryProvider(path=data_path)
-    feed = HistoricalFeed(provider=provider)
-    broker = BacktestBroker()
-    strategy = RegimeAdaptiveStrategy(
-        orb_bars=orb_bars,
-        entry_z=entry_z,
-        breakout_z=breakout_z,
-        trailing_stop_pct=trailing_stop_pct,
-        position_frac=position_frac,
-    )
-    portfolio = Portfolio(cash=STARTING_CASH, broker=broker)
-    engine = Engine(feed=feed, broker=broker, strategy=strategy,
-                    cash=STARTING_CASH, portfolio=portfolio)
-    engine.run()
-    return _compute_metrics(
-        portfolio, strategy,
-        {"strategy": "regime", "orb_bars": orb_bars, "entry_z": entry_z,
-         "breakout_z": breakout_z, "trail_stop": trailing_stop_pct,
-         "pos_frac": position_frac},
-    )
-
-
-def sweep_vwap(data_path: str) -> None:
-    """VWAP parameter sweep."""
+    print(f"=== {strategy_name.upper()} PARAMETER SWEEP ({len(grid)} combos) ===")
     results = []
-    for ez, xz, w in itertools.product([1.5, 2.0, 2.5], [0.3, 0.5, 0.7], [15, 20, 30]):
-        print(f"  vwap entry_z={ez} exit_z={xz} window={w} ... ", end="", flush=True)
-        m = run_vwap(data_path, entry_z=ez, exit_z=xz, rolling_window=w)
-        results.append(m)
-        print(f"return={m['total_return']:.2f}% sharpe={m['sharpe']:.2f}")
-    return results
-
-
-def sweep_regime(data_path: str) -> None:
-    """Regime-adaptive parameter sweep."""
-    results = []
-    combos = list(itertools.product(
-        [3, 5, 10],           # orb_bars
-        [1.5, 2.0, 2.5],     # entry_z
-        [3.0, 3.5, 4.0],     # breakout_z
-        [0.003, 0.005, 0.01], # trailing_stop_pct
-        [0.50, 0.80],         # position_frac
-    ))
-    print(f"Running {len(combos)} regime combinations ...\n")
-    for ob, ez, bz, ts, pf in combos:
-        print(f"  regime orb={ob} ez={ez} bz={bz} ts={ts} pf={pf} ... ", end="", flush=True)
-        m = run_regime(data_path, orb_bars=ob, entry_z=ez, breakout_z=bz,
-                       trailing_stop_pct=ts, position_frac=pf)
+    for params in grid:
+        params_str = " ".join(f"{k}={v}" for k, v in params.items())
+        print(f"  {strategy_name} {params_str} ... ", end="", flush=True)
+        m = run_backtest(data_path, strategy_name, **params)
         results.append(m)
         print(f"return={m['total_return']:.2f}% dd={m['max_drawdown']:.2f}% sharpe={m['sharpe']:.2f}")
     return results
 
 
+def _print_result(m: dict) -> None:
+    name = m["strategy"].upper()
+    print(
+        f"  {name}: return={m['total_return']:.3f}% "
+        f"dd={m['max_drawdown']:.3f}% "
+        f"sharpe={m['sharpe']:.2f} "
+        f"trades={m['trades']}"
+    )
+
+
+# ── CLI ──────────────────────────────────────────────────────────────
+
 def main() -> None:
+    available = list_strategies()
     parser = argparse.ArgumentParser(description="Backtest strategies")
     parser.add_argument("--data", required=True, help="Path to 1-min CSV")
-    parser.add_argument("--strategy", default="both",
-                        choices=["vwap", "regime", "alpha_vwap", "both"],
-                        help="Which strategy to run")
+    parser.add_argument(
+        "--strategy", default=None,
+        help=f"Strategy name (default: {STRATEGY_NAME} from config). "
+             f"Use 'all' to run every registered strategy. Available: {', '.join(available)}",
+    )
+    parser.add_argument(
+        "--params", default="{}",
+        help="JSON string of strategy params, e.g. '{\"leverage\": 1.0}'",
+    )
     parser.add_argument("--sweep", action="store_true", help="Run parameter sweep")
     args = parser.parse_args()
 
@@ -166,33 +153,34 @@ def main() -> None:
         print(f"Error: data file not found: {args.data}")
         return
 
-    if args.sweep:
-        all_results = []
-        if args.strategy in ("vwap", "both"):
-            print("=== VWAP PARAMETER SWEEP ===")
-            all_results.extend(sweep_vwap(args.data))
-        if args.strategy in ("regime", "both"):
-            print("\n=== REGIME PARAMETER SWEEP ===")
-            all_results.extend(sweep_regime(args.data))
+    strategy_params = json.loads(args.params)
 
-        df = pd.DataFrame(all_results).sort_values("total_return", ascending=False)
-        print("\n=== ALL RESULTS (sorted by return) ===")
-        print(df.head(20).to_string(index=False))
+    if args.strategy is None:
+        # Use active strategy from config
+        if args.sweep:
+            all_results = sweep(args.data, STRATEGY_NAME)
+            df = pd.DataFrame(all_results).sort_values("total_return", ascending=False)
+            print("\n=== ALL RESULTS (sorted by return) ===")
+            print(df.head(20).to_string(index=False))
+        else:
+            print(f"Running {STRATEGY_NAME} backtest (from config) ...")
+            m = run_backtest(args.data, **strategy_params)
+            _print_result(m)
     else:
-        if args.strategy in ("alpha_vwap", "both"):
-            print("Running AlphaVWAP backtest ...")
-            m = run_alpha_vwap(args.data)
-            print(f"  ALPHA_VWAP: return={m['total_return']:.3f}% dd={m['max_drawdown']:.3f}% sharpe={m['sharpe']:.2f} trades={m['trades']}")
+        targets = available if args.strategy == "all" else [args.strategy]
 
-        if args.strategy in ("vwap", "both"):
-            print("Running VWAP backtest ...")
-            m = run_vwap(args.data)
-            print(f"  VWAP: return={m['total_return']:.3f}% dd={m['max_drawdown']:.3f}% sharpe={m['sharpe']:.2f} trades={m['trades']}")
-
-        if args.strategy in ("regime", "both"):
-            print("Running Regime-Adaptive backtest ...")
-            m = run_regime(args.data)
-            print(f"  REGIME: return={m['total_return']:.3f}% dd={m['max_drawdown']:.3f}% sharpe={m['sharpe']:.2f} trades={m['trades']}")
+        if args.sweep:
+            all_results = []
+            for name in targets:
+                all_results.extend(sweep(args.data, name))
+            df = pd.DataFrame(all_results).sort_values("total_return", ascending=False)
+            print("\n=== ALL RESULTS (sorted by return) ===")
+            print(df.head(20).to_string(index=False))
+        else:
+            for name in targets:
+                print(f"Running {name} backtest ...")
+                m = run_backtest(args.data, name, **strategy_params)
+                _print_result(m)
 
 
 if __name__ == "__main__":
