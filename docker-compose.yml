@@ -1,0 +1,19 @@
+services:
+  trader:
+    build: .
+    container_name: systrade
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Persist strategy state and trade logs across restarts
+      - trade-data:/app/data
+      - ./strategy_state.json:/app/strategy_state.json
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  trade-data:

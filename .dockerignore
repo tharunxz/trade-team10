@@ -1,0 +1,43 @@
+# Git
+.git/
+.gitignore
+
+# Claude Code
+.claude/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data / runtime
+data/
+strategy_state.json
+trading_results.json
+
+# Secrets
+.env
+env.list
+*.pem
+
+# Tests and examples (not needed in prod image)
+tests/
+example/
+
+# Old dockerfile (replaced by Dockerfile)
+dockerfile
