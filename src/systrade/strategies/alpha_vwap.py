@@ -28,11 +28,12 @@ import math
 import os
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import override
 from zoneinfo import ZoneInfo
 
+from systrade import db
 from systrade.data import Bar, BarData, ExecutionReport
 from systrade.strategy import Strategy
 from systrade.strategies.signal_processing import (
@@ -202,9 +203,11 @@ class AlphaVWAPStrategy(Strategy):
             )
         self._active_symbols = list(self._symbols)
 
-        # Attempt crash recovery from checkpoint
+        # Attempt crash recovery: DB checkpoint → file checkpoint → DB bar warm-up
         if self._load_checkpoint():
             logger.info("Resumed from checkpoint — skipping fresh init")
+        else:
+            self._warm_up_from_db()
 
     @override
     def on_data(self, data: BarData) -> None:
@@ -238,6 +241,18 @@ class AlphaVWAPStrategy(Strategy):
 
         # Persist state for crash recovery
         self._save_checkpoint()
+
+        # Save bars to DB for warm-up on restart
+        bar_records = []
+        for sym in self._symbols:
+            bar = data.get(sym)
+            if bar is not None:
+                bar_records.append({
+                    "symbol": sym, "timestamp": data.as_of,
+                    "open": bar.open, "high": bar.high, "low": bar.low,
+                    "close": bar.close, "volume": bar.volume,
+                })
+        db.save_bars(bar_records)
 
     @override
     def on_execution(self, report: ExecutionReport) -> None:
@@ -590,6 +605,13 @@ class AlphaVWAPStrategy(Strategy):
         self._trading_records.append(record)
         with open("trading_results.json", "a") as f:
             f.write(json.dumps(record) + "\n")
+        db.record_trade(
+            traded_at=report.fill_timestamp or datetime.now(ET),
+            symbol=report.order.symbol,
+            side=record["side"],
+            quantity=record["quantity"],
+            price=report.last_price,
+        )
 
     # ── Crash Resilience: Checkpoint Save/Load ────────────────────────
 
@@ -628,8 +650,21 @@ class AlphaVWAPStrategy(Strategy):
         except Exception as e:
             logger.warning("Checkpoint save failed: %s", e)
 
+        # Also persist to DB (survives Railway redeploys)
+        if self._last_reset_date is not None:
+            db.save_checkpoint("alpha_vwap", self._last_reset_date.date(), checkpoint)
+
     def _load_checkpoint(self) -> bool:
-        """Restore state from disk after a crash. Returns True if loaded."""
+        """Restore state after a crash. Tries DB first, then local file."""
+        today = datetime.now(ET).date()
+
+        # Try DB first (survives Railway redeploys)
+        cp = db.load_checkpoint("alpha_vwap", today)
+        if cp is not None:
+            logger.info("Checkpoint loaded from DB for %s", today)
+            return self._apply_checkpoint(cp, today)
+
+        # Fall back to local file
         path = Path(self._checkpoint_path)
         if not path.exists():
             return False
@@ -638,27 +673,26 @@ class AlphaVWAPStrategy(Strategy):
             with open(path) as f:
                 cp = json.load(f)
         except Exception as e:
-            logger.warning("Checkpoint load failed: %s", e)
+            logger.warning("Checkpoint load from file failed: %s", e)
             return False
 
-        # Only restore if checkpoint is from today
         cp_date = cp.get("last_reset_date")
         if cp_date is None:
             return False
-
-        from datetime import date as date_type
         cp_date_parsed = datetime.fromisoformat(cp_date).date()
-        today = datetime.now(ET).date()
         if cp_date_parsed != today:
             logger.info("Checkpoint is from %s, not today — starting fresh", cp_date_parsed)
             return False
 
-        # Restore strategy-level state
+        logger.info("Checkpoint loaded from file for %s", today)
+        return self._apply_checkpoint(cp, cp_date_parsed)
+
+    def _apply_checkpoint(self, cp: dict, cp_date) -> bool:
+        """Apply a loaded checkpoint dict to restore strategy state."""
         self._last_reset_date = datetime.fromisoformat(cp["last_reset_date"])
         self._active_symbols = cp.get("active_symbols", list(self._symbols))
         self._open_position_count = cp.get("open_position_count", 0)
 
-        # Restore per-symbol state
         for sym, data in cp.get("symbols", {}).items():
             if sym not in self._states:
                 continue
@@ -676,7 +710,6 @@ class AlphaVWAPStrategy(Strategy):
             state.win_count = data.get("win_count", 0)
             state.bars_since_exit = data.get("bars_since_exit", 999)
 
-            # Replay saved prices/volumes through HMM and FFT to rebuild them
             saved_prices = data.get("prices_tail", [])
             saved_volumes = data.get("volumes_tail", [])
             for p, v in zip(saved_prices, saved_volumes):
@@ -686,16 +719,37 @@ class AlphaVWAPStrategy(Strategy):
                 state.prices.append(p)
                 state.volumes.append(v)
 
-            # Restore deviations deque
             for d in data.get("deviations", []):
                 state.deviations.append(d)
 
         logger.info(
             "CHECKPOINT RESTORED — %d bars on %s, active=%s",
             max((s.bar_count for s in self._states.values()), default=0),
-            cp_date_parsed, self._active_symbols,
+            cp_date, self._active_symbols,
         )
         return True
+
+    def _warm_up_from_db(self) -> None:
+        """Load recent bars from DB to warm up VWAP/HMM/FFT on fresh start."""
+        since = datetime.now(ET) - timedelta(hours=3)
+        bars = db.load_recent_bars(self._symbols, since)
+        if not bars:
+            return
+        for record in bars:
+            sym = record["symbol"]
+            state = self._states.get(sym)
+            if state is None:
+                continue
+            bar = Bar(
+                open=record["open"], high=record["high"],
+                low=record["low"], close=record["close"],
+                volume=record["volume"],
+            )
+            self._update_vwap(sym, bar)
+        logger.info(
+            "DB warm-up: replayed %d bars across %s",
+            len(bars), sorted(set(r["symbol"] for r in bars)),
+        )
 
 
 def _std(values) -> float:
