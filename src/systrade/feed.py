@@ -351,7 +351,7 @@ class AlpacaLiveStockFeed(Feed):
                 symbol_or_symbols=list(self._subscribed_symbols),
                 timeframe=ad.TimeFrame(amount=1, unit=ad.TimeFrameUnit.Minute),
                 start=start_time,
-                feed=ad.DataFeed.SIP,
+                feed=ad.DataFeed.IEX,
             )
 
             bars = self._data_client.get_stock_bars(bar_request)
