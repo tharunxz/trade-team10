@@ -138,7 +138,7 @@ class AlphaVWAPStrategy(Strategy):
 
     def __init__(
         self,
-        symbols: tuple[str, ...] = ("NVDA", "GOOG", "XLE", "AAPL", "QQQ"),
+        symbols: tuple[str, ...] = ("NVDL", "GGLL", "NRGU", "AAPU", "TQQQ"),
         max_active_symbols: int = 2,
         min_gap_pct: float = 0.15,
         twap_tranches: int = 3,
@@ -148,12 +148,13 @@ class AlphaVWAPStrategy(Strategy):
         entry_z: float = 3.0,
         fft_entry_z: float = 2.0,
         exit_z: float = 1.0,
-        stop_z: float = 5.0,
+        stop_z: float = 4.0,
         regime_confidence: float = 0.60,
-        position_frac: float = 0.50,
+        position_frac: float = 0.15,
         leverage: float = 2.0,
         max_positions: int = 2,
-        trailing_stop_pct: float = 0.004,
+        trailing_stop_pct: float = 0.015,
+        max_loss_pct: float = 0.03,
         cooldown_bars: int = 180,
         rolling_window: int = 30,
         min_bars: int = 20,
@@ -177,6 +178,7 @@ class AlphaVWAPStrategy(Strategy):
         self._leverage = leverage
         self._max_positions = max_positions
         self._trailing_stop_pct = trailing_stop_pct
+        self._max_loss_pct = max_loss_pct
         self._cooldown_bars = cooldown_bars
         self._rolling_window = rolling_window
         self._min_bars = min_bars
@@ -185,11 +187,12 @@ class AlphaVWAPStrategy(Strategy):
         self._active_symbols: list[str] = []  # today's tradeable symbols
         self._open_position_count = 0
         self._last_reset_date: datetime | None = None
+        self._last_status_log: datetime | None = None
         self._trading_records: list[dict] = []
 
         logger.info(
-            "AlphaVWAP initialized | universe=%s max_active=%d twap=%dx%d",
-            symbols, max_active_symbols, twap_tranches, twap_spacing,
+            "AlphaVWAP initialized | universe=%s max_active=%d pos_frac=%.0f%% max_loss=%.0f%%",
+            symbols, max_active_symbols, position_frac * 100, max_loss_pct * 100,
         )
 
     # ── Lifecycle ─────────────────────────────────────────────────────
@@ -231,6 +234,12 @@ class AlphaVWAPStrategy(Strategy):
                 continue
             self._update_vwap(sym, bar)
             self._process_twap(sym, bar)
+
+        # Periodic portfolio status log (~every 10 minutes)
+        if (self._last_status_log is None
+                or (now_et - self._last_status_log).total_seconds() >= 600):
+            self._log_portfolio_status()
+            self._last_status_log = now_et
 
         # Only trade active symbols (gap-selected)
         for sym in self._active_symbols:
@@ -503,6 +512,16 @@ class AlphaVWAPStrategy(Strategy):
         price = bar.close
         state.bars_since_exit += 1
 
+        # Max loss stop (critical for leveraged ETFs)
+        if state.entry_price is not None and state.entry_price > 0:
+            if state.entry_side == "long":
+                loss_pct = (state.entry_price - price) / state.entry_price
+            else:
+                loss_pct = (price - state.entry_price) / state.entry_price
+            if loss_pct > self._max_loss_pct:
+                self._close_position(sym, "MAX LOSS %.1f%%" % (loss_pct * 100))
+                return
+
         # Hard stop
         if abs(z) > self._stop_z:
             self._close_position(sym, "HARD STOP z=%.2f" % z)
@@ -583,6 +602,40 @@ class AlphaVWAPStrategy(Strategy):
         state.trailing_stop = 0.0
         state.bars_since_exit = 0
         logger.info("CLOSE %s qty=%+.0f reason=%s", sym, -pos.qty, reason)
+
+    def _log_portfolio_status(self) -> None:
+        """Log portfolio summary — positions, P&L, cash — every 10 minutes."""
+        try:
+            cash = self.portfolio.cash()
+            buying_power = self.portfolio.buying_power()
+            asset_val = self.portfolio.asset_value()
+        except Exception:
+            return  # portfolio not ready yet
+
+        positions = []
+        for sym in self._active_symbols:
+            state = self._states.get(sym)
+            if state is None:
+                continue
+            if not self.portfolio.is_invested_in(sym):
+                continue
+            pos = self.portfolio.position(sym)
+            entry = state.entry_price or 0
+            pnl_pct = 0.0
+            if entry > 0:
+                if state.entry_side == "long":
+                    pnl_pct = ((pos.qty * (state.prices[-1] if state.prices else entry) - pos.qty * entry)
+                               / (pos.qty * entry) * 100) if pos.qty else 0
+                else:
+                    pnl_pct = ((entry - (state.prices[-1] if state.prices else entry))
+                               / entry * 100)
+            positions.append(f"{sym}={pos.qty:+.0f}@{entry:.2f}({pnl_pct:+.1f}%)")
+
+        logger.info(
+            "STATUS | cash=$%.0f bpow=$%.0f assets=$%.0f | %s",
+            cash, buying_power, asset_val,
+            ", ".join(positions) if positions else "FLAT",
+        )
 
     def _flatten_all(self, reason: str) -> None:
         for sym in self._symbols:

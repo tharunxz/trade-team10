@@ -15,7 +15,8 @@ from systrade.strategy import Strategy
 STRATEGY_NAME = "alpha_vwap"
 
 STRATEGY_PARAMS: dict = {
-    "symbols": ("NVDA", "GOOG", "XLE", "AAPL", "QQQ"),
+    # Leveraged ETFs: NVDL(2x), GGLL(2x), NRGU(3x), AAPU(2x), TQQQ(3x)
+    "symbols": ("NVDL", "GGLL", "NRGU", "AAPU", "TQQQ"),
     "max_active_symbols": 2,
     "min_gap_pct": 0.15,
     "twap_tranches": 3,
@@ -24,11 +25,14 @@ STRATEGY_PARAMS: dict = {
     "entry_z": 3.0,
     "fft_entry_z": 2.0,
     "exit_z": 1.0,
-    "position_frac": 0.50,
+    "position_frac": 0.15,         # down from 0.50 — discipline for leveraged products
     "max_positions": 2,
     "min_bars": 20,
     "regime_confidence": 0.60,
     "cooldown_bars": 180,
+    "trailing_stop_pct": 0.015,    # wider than 0.4% — leveraged ETFs need room
+    "stop_z": 4.0,                 # tighter than 5.0 — cut losers faster
+    "max_loss_pct": 0.03,          # hard 3% max loss per trade
 }
 
 # Context-specific overrides (merged on top of STRATEGY_PARAMS)
