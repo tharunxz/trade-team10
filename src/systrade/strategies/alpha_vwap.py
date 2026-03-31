@@ -224,6 +224,7 @@ class AlphaVWAPStrategy(Strategy):
         if now_time >= FLATTEN_TIME:
             self._cancel_all_twaps()
             self._flatten_all("EOD flatten")
+            self._save_checkpoint()
             return
 
         # Process TWAP orders for ALL symbols (even non-active, in case

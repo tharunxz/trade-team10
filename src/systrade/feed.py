@@ -354,7 +354,12 @@ class AlpacaLiveStockFeed(Feed):
                 feed=ad.DataFeed.IEX,
             )
 
-            bars = self._data_client.get_stock_bars(bar_request)
+            try:
+                bars = self._data_client.get_stock_bars(bar_request)
+            except Exception as e:
+                logger.warning("Alpaca API error: %s — retrying in %ds", e, self._poll_interval)
+                time.sleep(self._poll_interval)
+                continue
 
             if bars is None or bars.df.empty:
                 logger.debug("No data returned from poll, sleeping...")

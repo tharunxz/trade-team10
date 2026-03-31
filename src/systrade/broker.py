@@ -133,12 +133,16 @@ class AlpacaBroker(Broker):
         if not self._pending_orders:
             return
 
-        request_params = GetOrdersRequest(
-            status=QueryOrderStatus.CLOSED,
-            limit=100,
-            nested=True
-        )
-        closed_orders: List[AlpacaOrderModel] = self.trading_client.get_orders(request_params)
+        try:
+            request_params = GetOrdersRequest(
+                status=QueryOrderStatus.CLOSED,
+                limit=100,
+                nested=True
+            )
+            closed_orders: List[AlpacaOrderModel] = self.trading_client.get_orders(request_params)
+        except Exception as e:
+            print(f"Failed to poll order status: {e}")
+            return
 
         for alpaca_order in closed_orders:
             client_order_id = alpaca_order.client_order_id
