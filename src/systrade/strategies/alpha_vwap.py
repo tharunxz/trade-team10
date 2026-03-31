@@ -138,7 +138,7 @@ class AlphaVWAPStrategy(Strategy):
 
     def __init__(
         self,
-        symbols: tuple[str, ...] = ("TQQQ", "SOXL", "UPRO", "TNA", "FAS"),
+        symbols: tuple[str, ...] = ("TQQQ", "SOXL", "TNA", "SQQQ", "UDOW"),
         max_active_symbols: int = 2,
         min_gap_pct: float = 0.15,
         twap_tranches: int = 3,

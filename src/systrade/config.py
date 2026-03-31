@@ -15,10 +15,10 @@ from systrade.strategy import Strategy
 STRATEGY_NAME = "alpha_vwap"
 
 STRATEGY_PARAMS: dict = {
-    # Liquid leveraged ETFs with reliable IEX data and shortability
-    # TQQQ(3x Nasdaq), SOXL(3x Semis), UPRO(3x S&P), TNA(3x Russell), FAS(3x Financials)
-    "symbols": ("TQQQ", "SOXL", "UPRO", "TNA", "FAS"),
-    "max_active_symbols": 2,
+    # Liquid leveraged ETFs verified with 7-9 IEX bars per 10 min
+    # TQQQ(3x Nasdaq), SOXL(3x Semis), TNA(3x Russell), SQQQ(3x inv Nasdaq), UDOW(3x Dow)
+    "symbols": ("TQQQ", "SOXL", "TNA", "SQQQ", "UDOW"),
+    "max_active_symbols": 3,
     "min_gap_pct": 0.15,
     "twap_tranches": 3,
     "twap_spacing": 2,
