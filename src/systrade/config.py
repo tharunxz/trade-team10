@@ -15,8 +15,9 @@ from systrade.strategy import Strategy
 STRATEGY_NAME = "alpha_vwap"
 
 STRATEGY_PARAMS: dict = {
-    # Leveraged ETFs: NVDL(2x), GGLL(2x), NRGU(3x), AAPU(2x), TQQQ(3x)
-    "symbols": ("NVDL", "GGLL", "NRGU", "AAPU", "TQQQ"),
+    # Liquid leveraged ETFs with reliable IEX data and shortability
+    # TQQQ(3x Nasdaq), SOXL(3x Semis), UPRO(3x S&P), TNA(3x Russell), FAS(3x Financials)
+    "symbols": ("TQQQ", "SOXL", "UPRO", "TNA", "FAS"),
     "max_active_symbols": 2,
     "min_gap_pct": 0.15,
     "twap_tranches": 3,

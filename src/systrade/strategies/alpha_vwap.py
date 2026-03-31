@@ -138,7 +138,7 @@ class AlphaVWAPStrategy(Strategy):
 
     def __init__(
         self,
-        symbols: tuple[str, ...] = ("NVDL", "GGLL", "NRGU", "AAPU", "TQQQ"),
+        symbols: tuple[str, ...] = ("TQQQ", "SOXL", "UPRO", "TNA", "FAS"),
         max_active_symbols: int = 2,
         min_gap_pct: float = 0.15,
         twap_tranches: int = 3,
@@ -189,6 +189,12 @@ class AlphaVWAPStrategy(Strategy):
         self._last_reset_date: datetime | None = None
         self._last_status_log: datetime | None = None
         self._trading_records: list[dict] = []
+        # Leveraged single-stock ETFs cannot be shorted on Alpaca paper trading.
+        # Only broad-market leveraged ETFs (TQQQ, SQQQ, etc.) are shortable.
+        self._shortable: set[str] = {
+            "TQQQ", "SQQQ", "SOXL", "SOXS", "UPRO", "SPXU",
+            "TNA", "TZA", "FAS", "FAZ", "ERX", "NRGU", "LABU",
+        }
 
         logger.info(
             "AlphaVWAP initialized | universe=%s max_active=%d pos_frac=%.0f%% max_loss=%.0f%%",
@@ -486,6 +492,9 @@ class AlphaVWAPStrategy(Strategy):
                             sym, qty, z, gap, fft_confirmed)
 
         elif z > effective_z:
+            if sym not in self._shortable:
+                logger.debug("SKIP SHORT %s — not shortable on Alpaca", sym)
+                return
             qty = self._compute_size(bar.close)
             if qty > 0:
                 self._start_twap(sym, -qty, bar.close)
@@ -502,7 +511,7 @@ class AlphaVWAPStrategy(Strategy):
                 state.trailing_stop = bar.close * (1 - self._trailing_stop_pct)
                 logger.info("TREND LONG %s z=%.2f", sym, z)
 
-        elif trend_dir < 0 and 0.5 < z < 1.5:
+        elif trend_dir < 0 and 0.5 < z < 1.5 and sym in self._shortable:
             qty = self._compute_size(bar.close)
             if qty > 0:
                 self._start_twap(sym, -qty, bar.close)
