@@ -191,10 +191,12 @@ class AlphaVWAPStrategy(Strategy):
         self._trading_records: list[dict] = []
         # Leveraged single-stock ETFs cannot be shorted on Alpaca paper trading.
         # Only broad-market leveraged ETFs (TQQQ, SQQQ, etc.) are shortable.
-        # Disable shorting — account has $0 daytrading buying power (PDT rule).
-        # All short orders get rejected with "insufficient day trading buying power".
-        # Strategy is long-only until PDT restriction is resolved.
-        self._shortable: set[str] = set()
+        # Account dtbp_check set to 'exit' — bypasses PDT daytrading BP check on entry.
+        # All broad-market leveraged ETFs are shortable on Alpaca paper.
+        self._shortable: set[str] = {
+            "TQQQ", "SQQQ", "SOXL", "SOXS", "UPRO", "SPXU",
+            "TNA", "TZA", "FAS", "FAZ", "ERX", "NRGU", "LABU", "UDOW", "SDOW",
+        }
 
         logger.info(
             "AlphaVWAP initialized | universe=%s max_active=%d pos_frac=%.0f%% max_loss=%.0f%%",
