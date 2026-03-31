@@ -218,10 +218,34 @@ class Portfolio(PortfolioView):
         self._cash -= qty * price
 
 # --- Adapter Class to bridge Broker API with PortfolioView interface ---
+import time as _time
+
+
 class LivePortfolioView(PortfolioView):
+    _ACCT_TTL = 5  # seconds — cache account data to cut API calls
+
     def __init__(self, broker: AlpacaBroker):
         self._broker = broker
         self._last_prices: dict[str, float] = {}
+        self._acct_cache = None
+        self._acct_ts: float = 0.0
+
+    # ── Cached account access ────────────────────────────────────
+
+    def _account(self):
+        """Return cached Alpaca account, refreshing every _ACCT_TTL seconds."""
+        now = _time.monotonic()
+        if self._acct_cache is None or (now - self._acct_ts) > self._ACCT_TTL:
+            try:
+                self._acct_cache = self._broker.get_account_details()
+                self._acct_ts = now
+            except Exception as e:
+                logger.warning("Account API failed: %s — using cached data", e)
+                if self._acct_cache is None:
+                    raise
+        return self._acct_cache
+
+    # ── PortfolioView interface ──────────────────────────────────
 
     @override
     def on_data(self, data: BarData) -> None:
@@ -231,49 +255,51 @@ class LivePortfolioView(PortfolioView):
     def update_prices(self, data: BarData):
         """Iterate through all symbols in the data packet to update the cache"""
         for sym in data.symbols():
-            # Use bracket access which you've confirmed works in your strategy
-            self._last_prices[sym] = data[sym].close 
+            self._last_prices[sym] = data[sym].close
         self._as_of_time = data.as_of
+        # Invalidate account cache so next read gets fresh data
+        self._acct_ts = 0.0
 
     @override
     def cash(self) -> float:
-        acct = self._broker.get_account_details()
-        return float(acct.cash)
+        return float(self._account().cash)
 
     @override
     def buying_power(self) -> float:
-        acct = self._broker.get_account_details()
-        return float(acct.buying_power)
+        return float(self._account().buying_power)
 
     @override
     def asset_value(self) -> float:
-        acct = self._broker.get_account_details()
-        return float(acct.equity) - self.cash()
+        acct = self._account()
+        return float(acct.equity) - float(acct.cash)
 
     @override
     def asset_value_of(self, symbol: str) -> float:
-        pos = self._broker.trading_client.get_open_position(symbol)
-        return float(pos.market_value) if pos else 0.0
+        try:
+            pos = self._broker.trading_client.get_open_position(symbol)
+            return float(pos.market_value) if pos else 0.0
+        except Exception:
+            return 0.0
 
     @override
     def value(self) -> float:
-        acct = self._broker.get_account_details()
-        return float(acct.equity)
+        return float(self._account().equity)
 
     @override
     def as_of(self) -> datetime:
-        return getattr(self, '_as_of_time', datetime.now(ZoneInfo("UTC")))
+        return getattr(self, '_as_of_time', datetime.min)
 
     @override
     def is_invested(self) -> bool:
-        positions = self._broker.trading_client.get_all_positions()
-        return bool(positions)
+        try:
+            positions = self._broker.trading_client.get_all_positions()
+            return bool(positions)
+        except Exception:
+            return False
 
     @override
     def is_invested_in(self, symbol: str) -> bool:
         try:
-            # Changed to <get_open_position> because
-            #+<get_position> wasn't working
             self._broker.trading_client.get_open_position(symbol)
             return True
         except Exception:
@@ -288,15 +314,12 @@ class LivePortfolioView(PortfolioView):
 
     @override
     def activity(self) -> None:
-        raise NotImplementedError("{red}Activity tracking is done by the broker in live mode.{reset}")
-        
+        raise NotImplementedError("Activity tracking is done by the broker in live mode.")
+
     @override
     def on_fill(self, symbol: str, price: float, qty: float) -> None:
-        """
-        Called when a trade is executed. 
-        In LivePortfolioView, we ignore this because the Broker 
-        updates our positions/cash automatically.
-        """
-        logger.debug(f"{hl_blue}Live fill received for {symbol}: {qty} @ {price}. Skipping local update.{reset}")
-        pass   
+        """No-op — Alpaca tracks positions server-side."""
+        logger.debug("Live fill: %s %+.0f @ %.2f (tracked by Alpaca)", symbol, qty, price)
+        # Invalidate account cache so next portfolio read is fresh
+        self._acct_ts = 0.0
 

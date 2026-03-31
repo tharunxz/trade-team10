@@ -14,11 +14,28 @@ logger = logging.getLogger(__name__)
 _conn = None
 
 
+def _reset_connection() -> None:
+    """Close and discard the current connection."""
+    global _conn
+    if _conn is not None:
+        try:
+            _conn.close()
+        except Exception:
+            pass
+    _conn = None
+
+
 def _get_connection():
     """Return a lazy singleton connection, or None if DB is not configured."""
     global _conn
-    if _conn is not None and not _conn.closed:
-        return _conn
+    if _conn is not None:
+        try:
+            if not _conn.closed:
+                _conn.execute("SELECT 1")  # verify connection is alive
+                return _conn
+        except Exception:
+            logger.info("DB connection stale — reconnecting")
+            _reset_connection()
 
     url = os.getenv("DATABASE_URL")
     if not url:
@@ -100,6 +117,7 @@ def save_checkpoint(
         return True
     except Exception as e:
         logger.warning("Checkpoint save to DB failed: %s", e)
+        _reset_connection()
         return False
 
 
@@ -117,6 +135,7 @@ def load_checkpoint(strategy_name: str, checkpoint_date: date) -> dict | None:
         return row[0] if row else None
     except Exception as e:
         logger.warning("Checkpoint load from DB failed: %s", e)
+        _reset_connection()
         return None
 
 
@@ -136,6 +155,7 @@ def record_trade(
         return True
     except Exception as e:
         logger.warning("Trade record to DB failed: %s", e)
+        _reset_connection()
         return False
 
 
@@ -165,6 +185,7 @@ def save_bars(bars: list[dict]) -> bool:
         return True
     except Exception as e:
         logger.warning("Bar save to DB failed: %s", e)
+        _reset_connection()
         return False
 
 
@@ -194,4 +215,5 @@ def load_recent_bars(symbols: tuple[str, ...], since: datetime) -> list[dict]:
         ]
     except Exception as e:
         logger.warning("Bar load from DB failed: %s", e)
+        _reset_connection()
         return []

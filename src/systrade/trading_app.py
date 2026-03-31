@@ -249,23 +249,48 @@ def main():
         logger.error("API keys not set. Exiting.")
         return
 
-    feed = AlpacaLiveStockFeed()
-    broker = AlpacaBroker()
-    strategy = make_live_strategy()
+    import time
+    max_restarts = 50
+    fast_crashes = 0
 
-    logger.info(f"Using strategy: {STRATEGY_NAME}")
-    engine = Engine(feed=feed, broker=broker, strategy=strategy, cash=STARTING_CASH)
+    while fast_crashes < max_restarts:
+        run_start = time.time()
+        try:
+            feed = AlpacaLiveStockFeed()
+            broker = AlpacaBroker()
+            strategy = make_live_strategy()
 
-    logger.info("Engine initialized. Starting run...")
+            logger.info(f"Using strategy: {STRATEGY_NAME} (restarts={fast_crashes})")
+            engine = Engine(feed=feed, broker=broker, strategy=strategy, cash=STARTING_CASH)
+            logger.info("Engine initialized. Starting run...")
 
-    try:
-        engine.run()
-        logger.info("Engine run completed successfully.")
+            engine.run()
+            logger.info("Engine run completed successfully.")
+            break  # clean exit
 
-    except KeyboardInterrupt:
-        logger.info("Trading interrupted by user. Stopping engine.")
-    except Exception as e:
-        logger.error(f"{hl_red}An unexpected error occurred: {e}{reset}")
+        except KeyboardInterrupt:
+            logger.info("Trading interrupted by user.")
+            break
+        except Exception as e:
+            run_secs = time.time() - run_start
+            if run_secs > 300:
+                fast_crashes = 0  # ran 5+ min — not a fast crash, reset counter
+            else:
+                fast_crashes += 1
+
+            delay = min(10 * (2 ** fast_crashes), 300)  # 20s → 40s → … → 5min cap
+            logger.error(
+                "%sEngine crashed after %.0fs (fast_crash #%d/%d): %s%s",
+                hl_red, run_secs, fast_crashes, max_restarts, e, reset,
+                exc_info=True,
+            )
+            logger.info("Auto-restarting in %ds...", delay)
+            time.sleep(delay)
+    else:
+        logger.critical(
+            "%s%d consecutive fast crashes — giving up. Manual intervention needed.%s",
+            hl_red, max_restarts, reset,
+        )
 
     logger.info("Application stopped.")
 
