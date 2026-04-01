@@ -2,7 +2,9 @@ README.md
 pyproject.toml
 src/systrade/__init__.py
 src/systrade/broker.py
+src/systrade/config.py
 src/systrade/data.py
+src/systrade/db.py
 src/systrade/engine.py
 src/systrade/feed.py
 src/systrade/history.py
@@ -15,9 +17,17 @@ src/systrade.egg-info/SOURCES.txt
 src/systrade.egg-info/dependency_links.txt
 src/systrade.egg-info/requires.txt
 src/systrade.egg-info/top_level.txt
+src/systrade/strategies/__init__.py
+src/systrade/strategies/alpha_vwap.py
+src/systrade/strategies/quant_vwap.py
+src/systrade/strategies/regime_adaptive.py
+src/systrade/strategies/registry.py
+src/systrade/strategies/signal_processing.py
+src/systrade/strategies/vwap_mean_reversion.py
 tests/test_broker.py
 tests/test_engine.py
 tests/test_feed.py
 tests/test_historical_feed.py
 tests/test_portfolio.py
 tests/test_position.py
+tests/test_vwap_strategy.py

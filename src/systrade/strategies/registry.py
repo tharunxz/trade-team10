@@ -17,6 +17,7 @@ from systrade.strategies.alpha_vwap import AlphaVWAPStrategy
 from systrade.strategies.quant_vwap import QuantVWAPStrategy
 from systrade.strategies.regime_adaptive import RegimeAdaptiveStrategy
 from systrade.strategies.vwap_mean_reversion import VWAPMeanReversionStrategy
+from systrade.strategies.volume_surge_breakout import VolumeSurgeBreakoutStrategy
 
 
 _REGISTRY: dict[str, type[Strategy]] = {
@@ -24,6 +25,7 @@ _REGISTRY: dict[str, type[Strategy]] = {
     "quant_vwap": QuantVWAPStrategy,
     "regime": RegimeAdaptiveStrategy,
     "vwap": VWAPMeanReversionStrategy,
+    "vsb": VolumeSurgeBreakoutStrategy,
 }
 
 

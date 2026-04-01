@@ -7,7 +7,6 @@ Usage:
 """
 
 import argparse
-import os
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -15,7 +14,10 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from alpaca.data import StockHistoricalDataClient, StockBarsRequest, TimeFrame, TimeFrameUnit
 
-SYMBOLS = ["SPY", "QQQ", "AAPL", "MSFT", "NVDA"]
+# Import symbols and credentials from the single source of truth.
+# config.py calls load_dotenv(), so .env is loaded automatically.
+from systrade.config import TRADING_SYMBOLS, get_alpaca_credentials
+
 ET = ZoneInfo("America/New_York")
 
 
@@ -65,14 +67,14 @@ def main() -> None:
     parser.add_argument("--output", default="data/history_1min.csv", help="Output CSV path")
     args = parser.parse_args()
 
-    api_key = os.environ["ALPACA_API_KEY"]
-    secret_key = os.environ["ALPACA_API_SECRET"]
+    api_key, secret_key, _ = get_alpaca_credentials()
 
     start_dt = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=ET)
     end_dt = datetime.strptime(args.end, "%Y-%m-%d").replace(hour=23, minute=59, tzinfo=ET)
 
-    print(f"Fetching 1-min bars for {SYMBOLS} from {args.start} to {args.end} ...")
-    df = fetch_bars(SYMBOLS, start_dt, end_dt, api_key, secret_key)
+    symbols = list(TRADING_SYMBOLS)
+    print(f"Fetching 1-min bars for {symbols} from {args.start} to {args.end} ...")
+    df = fetch_bars(symbols, start_dt, end_dt, api_key, secret_key)
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

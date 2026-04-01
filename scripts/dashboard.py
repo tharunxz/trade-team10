@@ -21,16 +21,19 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOrdersRequest
 from alpaca.trading.enums import QueryOrderStatus
 
+# config.py loads .env and provides get_alpaca_credentials()
+from systrade.config import get_alpaca_credentials
+
 ET = ZoneInfo("America/New_York")
 
 
 def get_client() -> TradingClient:
-    api_key = os.environ.get("ALPACA_API_KEY")
-    secret = os.environ.get("ALPACA_API_SECRET")
-    if not api_key or not secret:
-        print("Set ALPACA_API_KEY and ALPACA_API_SECRET")
+    try:
+        api_key, secret, paper = get_alpaca_credentials()
+    except ValueError:
+        print("Set ALPACA_API_KEY and ALPACA_API_SECRET in environment or .env file")
         sys.exit(1)
-    return TradingClient(api_key, secret, paper=True)
+    return TradingClient(api_key, secret, paper=paper)
 
 
 def show_account(client: TradingClient) -> None:

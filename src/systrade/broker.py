@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 from collections import defaultdict
-import os
 from typing import override, Optional, List
 
 from alpaca.trading.client import TradingClient
@@ -111,12 +110,8 @@ class AlpacaBroker(Broker):
     """A broker to communicate with Alpaca API for live/paper trading."""
 
     def __init__(self) -> None:
-        api_key = os.getenv("ALPACA_API_KEY")
-        secret_key = os.getenv("ALPACA_API_SECRET")
-        paper_trading = os.getenv("ALPACA_PAPER", "True").lower() == "true" 
-
-        if not api_key or not secret_key:
-            raise ValueError("ALPACA_API_KEY and ALPACA_API_SECRET environment variables must be set.")
+        from systrade.config import get_alpaca_credentials  # local import avoids circular dep
+        api_key, secret_key, paper_trading = get_alpaca_credentials()
 
         self.trading_client = TradingClient(api_key, secret_key, paper=paper_trading)
         

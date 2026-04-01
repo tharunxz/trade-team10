@@ -94,6 +94,12 @@ class SymbolState:
         0, 0, 0, False, False, 0,
     ))
 
+    # Simple trend filter: EMA of z-scores over 60 bars.
+    # If EMA(z) is strongly negative, price is persistently below VWAP = downtrend.
+    # If EMA(z) is strongly positive, persistent above VWAP = uptrend.
+    z_ema: float = 0.0
+    z_ema_alpha: float = 2.0 / (60 + 1)  # 60-bar EMA
+
     # Gap tracking
     prev_close: float | None = None  # previous day's last close
     gap_pct: float = 0.0             # overnight gap percentage
@@ -136,6 +142,15 @@ class AlphaVWAPStrategy(Strategy):
         Minimum bars between trades per symbol.
     """
 
+    # Default shortable set used when no shortable_symbols argument is provided.
+    # The authoritative copy lives in config.SHORTABLE_SYMBOLS; this default
+    # keeps the class usable standalone without importing config (which would
+    # create a circular import via config → registry → alpha_vwap).
+    _DEFAULT_SHORTABLE: frozenset[str] = frozenset({
+        "TQQQ", "SQQQ", "SOXL", "SOXS", "UPRO", "SPXU",
+        "TNA", "TZA", "FAS", "FAZ", "ERX", "NRGU", "LABU", "UDOW", "SDOW",
+    })
+
     def __init__(
         self,
         symbols: tuple[str, ...] = ("TQQQ", "SOXL", "TNA", "SQQQ", "UDOW"),
@@ -145,20 +160,21 @@ class AlphaVWAPStrategy(Strategy):
         twap_spacing: int = 2,
         twap_offset_bps: float = 1.0,
         twap_timeout: int = 15,
-        entry_z: float = 3.0,
-        fft_entry_z: float = 2.0,
-        exit_z: float = 1.0,
+        entry_z: float = 2.0,
+        fft_entry_z: float = 1.5,
+        exit_z: float = 0.0,
         stop_z: float = 4.0,
         regime_confidence: float = 0.60,
         position_frac: float = 0.15,
         leverage: float = 2.0,
         max_positions: int = 2,
-        trailing_stop_pct: float = 0.015,
-        max_loss_pct: float = 0.03,
-        cooldown_bars: int = 180,
+        trailing_stop_pct: float = 0.025,
+        max_loss_pct: float = 0.05,
+        cooldown_bars: int = 45,
         rolling_window: int = 30,
         min_bars: int = 20,
         checkpoint_path: str = "strategy_state.json",
+        shortable_symbols: frozenset[str] | None = None,
     ) -> None:
         super().__init__()
         self._symbols = symbols
@@ -189,14 +205,12 @@ class AlphaVWAPStrategy(Strategy):
         self._last_reset_date: datetime | None = None
         self._last_status_log: datetime | None = None
         self._trading_records: list[dict] = []
-        # Leveraged single-stock ETFs cannot be shorted on Alpaca paper trading.
-        # Only broad-market leveraged ETFs (TQQQ, SQQQ, etc.) are shortable.
-        # Account dtbp_check set to 'exit' — bypasses PDT daytrading BP check on entry.
-        # All broad-market leveraged ETFs are shortable on Alpaca paper.
-        self._shortable: set[str] = {
-            "TQQQ", "SQQQ", "SOXL", "SOXS", "UPRO", "SPXU",
-            "TNA", "TZA", "FAS", "FAZ", "ERX", "NRGU", "LABU", "UDOW", "SDOW",
-        }
+        # Which symbols can be shorted on Alpaca — passed in from config.SHORTABLE_SYMBOLS
+        # when created via make_live_strategy() / make_backtest_strategy(), or falls back
+        # to the class-level default for standalone instantiation.
+        self._shortable: frozenset[str] = (
+            shortable_symbols if shortable_symbols is not None else self._DEFAULT_SHORTABLE
+        )
 
         logger.info(
             "AlphaVWAP initialized | universe=%s max_active=%d pos_frac=%.0f%% max_loss=%.0f%%",
@@ -478,13 +492,17 @@ class AlphaVWAPStrategy(Strategy):
         confidence = state.regime.confidence
         cycle = state.cycle
 
-        # Skip volatile regimes
-        if regime == MarketRegime.VOLATILE and confidence > self._regime_confidence:
-            return
+        # Simple trend filter: if z_ema is strongly directional, price has
+        # been persistently on one side of VWAP — skip MR entries that fight
+        # the trend.  |z_ema| > 1.5 means ~1 hour of sustained deviation.
+        z_ema = state.z_ema
+        trending_down = z_ema < -1.5
+        trending_up = z_ema > 1.5
 
-        # Trending: go with trend on pullback
-        if regime == MarketRegime.TRENDING and confidence > self._regime_confidence:
-            self._trend_entry(sym, bar, z, state)
+        # Don't long into a downtrend or short into an uptrend
+        if z < 0 and trending_down:
+            return
+        if z > 0 and trending_up:
             return
 
         # FFT-enhanced entry
@@ -504,8 +522,8 @@ class AlphaVWAPStrategy(Strategy):
             qty = self._compute_size(bar.close)
             if qty > 0:
                 self._start_twap(sym, qty, bar.close)
-                logger.info("ENTRY LONG %s qty=%d z=%.2f gap=%.2f%% fft=%s",
-                            sym, qty, z, gap, fft_confirmed)
+                logger.info("ENTRY LONG %s qty=%d z=%.2f z_ema=%.2f gap=%.2f%% fft=%s",
+                            sym, qty, z, z_ema, gap, fft_confirmed)
 
         elif z > effective_z:
             if sym not in self._shortable:
@@ -514,8 +532,8 @@ class AlphaVWAPStrategy(Strategy):
             qty = self._compute_size(bar.close)
             if qty > 0:
                 self._start_twap(sym, -qty, bar.close)
-                logger.info("ENTRY SHORT %s qty=%d z=%.2f gap=%.2f%% fft=%s",
-                            sym, qty, z, gap, fft_confirmed)
+                logger.info("ENTRY SHORT %s qty=%d z=%.2f z_ema=%.2f gap=%.2f%% fft=%s",
+                            sym, qty, z, z_ema, gap, fft_confirmed)
 
     def _trend_entry(self, sym: str, bar: Bar, z: float, state: SymbolState) -> None:
         trend_dir = state.regime.trend_strength
@@ -553,25 +571,14 @@ class AlphaVWAPStrategy(Strategy):
             self._close_position(sym, "HARD STOP z=%.2f" % z)
             return
 
-        regime = state.regime.regime
+        # Note: HMM regime-based exits were tested and removed — the HMM
+        # TRENDING label is wrong 90% of the time, causing premature exits
+        # that lock in losses.  z_ema-based trend exits were also tested but
+        # hurt combined portfolio performance.  Rely on max_loss / hard_stop
+        # / MR trailing exit instead.
 
-        # Trailing stop in trending regime
-        if regime == MarketRegime.TRENDING and state.regime.confidence > self._regime_confidence:
-            if state.entry_side == "long":
-                state.trailing_stop = max(state.trailing_stop,
-                                          price * (1 - self._trailing_stop_pct))
-                if price <= state.trailing_stop:
-                    self._close_position(sym, "TRAIL STOP LONG")
-            elif state.entry_side == "short":
-                new_stop = price * (1 + self._trailing_stop_pct)
-                state.trailing_stop = min(
-                    state.trailing_stop if state.trailing_stop > 0 else float("inf"),
-                    new_stop)
-                if price >= state.trailing_stop:
-                    self._close_position(sym, "TRAIL STOP SHORT")
-            return
-
-        # MR exit + FFT-enhanced exit
+        # MR exit: once z crosses exit threshold, activate trailing stop
+        # instead of immediately closing.  This lets us ride overshoots.
         cycle = state.cycle
         fft_exit = (
             cycle.cycle_strength > 2.0
@@ -579,10 +586,26 @@ class AlphaVWAPStrategy(Strategy):
                  or (state.entry_side == "short" and cycle.at_trough))
         )
 
+        mr_exit_triggered = False
         if state.entry_side == "long" and (z > -self._exit_z or fft_exit):
-            self._close_position(sym, "MR EXIT LONG z=%.2f" % z)
+            mr_exit_triggered = True
         elif state.entry_side == "short" and (z < self._exit_z or fft_exit):
-            self._close_position(sym, "MR EXIT SHORT z=%.2f" % z)
+            mr_exit_triggered = True
+
+        if mr_exit_triggered:
+            # Activate trailing stop to capture overshoot beyond VWAP
+            if state.entry_side == "long":
+                new_stop = price * (1 - self._trailing_stop_pct)
+                if state.trailing_stop == 0.0 or new_stop > state.trailing_stop:
+                    state.trailing_stop = new_stop
+                if price <= state.trailing_stop:
+                    self._close_position(sym, "MR TRAIL EXIT LONG z=%.2f" % z)
+            elif state.entry_side == "short":
+                new_stop = price * (1 + self._trailing_stop_pct)
+                if state.trailing_stop == 0.0 or new_stop < state.trailing_stop:
+                    state.trailing_stop = new_stop
+                if price >= state.trailing_stop:
+                    self._close_position(sym, "MR TRAIL EXIT SHORT z=%.2f" % z)
 
     # ── Helpers ───────────────────────────────────────────────────────
 
@@ -602,6 +625,11 @@ class AlphaVWAPStrategy(Strategy):
         state.prices.append(price)
         state.volumes.append(volume)
         state.bar_count += 1
+
+        # Update z-score EMA for trend filtering
+        std = _std(state.deviations)
+        z = dev / std if std > 1e-9 else 0.0
+        state.z_ema = state.z_ema_alpha * z + (1 - state.z_ema_alpha) * state.z_ema
 
         state.regime = state.hmm.update(price, volume)
         state.cycle = state.fft.update(dev)
@@ -644,7 +672,7 @@ class AlphaVWAPStrategy(Strategy):
                 continue
             state = self._states.get(sym)
             pos = self.portfolio.position(sym)
-            entry = state.entry_price if state else 0
+            entry = state.entry_price if (state and state.entry_price is not None) else 0
             last_price = state.prices[-1] if (state and state.prices) else 0
             pnl_pct = 0.0
             if entry and entry > 0 and last_price > 0:

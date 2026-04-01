@@ -1,20 +1,16 @@
 from abc import ABC, abstractmethod
 from datetime import datetime, time as dt_time, timedelta
+from pathlib import Path
 from typing import Optional, override
 from zoneinfo import ZoneInfo
+import logging
+import time
 
-from pathlib import Path
-import os
+import alpaca.data as ad
 import pandas as pd
 
 from systrade.data import Bar, BarData
 from systrade.history import HistoryProvider
-
-import alpaca.data as ad
-import pandas as pd
-from systrade.data import Bar, BarData
-import logging
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -237,12 +233,12 @@ class AlpacaLiveStockFeed(Feed):
     """
     def __init__(self):
         super().__init__()
-        api_key = os.getenv("ALPACA_API_KEY")
-        secret_key = os.getenv("ALPACA_API_SECRET")
-
-        if not api_key or not secret_key:
+        from systrade.config import get_alpaca_credentials  # local import avoids circular dep
+        try:
+            api_key, secret_key, _ = get_alpaca_credentials()
+        except ValueError as exc:
             logger.error("API keys missing! Check environment variables.")
-            raise ValueError("ALPACA_API_KEY and ALPACA_API_SECRET must be set in environment variables.")
+            raise
 
         self._data_client = ad.StockHistoricalDataClient(api_key, secret_key)
         self._is_running = False

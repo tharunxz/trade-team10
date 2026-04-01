@@ -1,6 +1,5 @@
 """Systematic Trading Application"""
 
-import os
 import json
 import logging
 from datetime import datetime
@@ -12,7 +11,7 @@ from systrade.broker import AlpacaBroker
 from systrade.strategy import Strategy
 from systrade.data import BarData, ExecutionReport
 from systrade.engine import Engine
-from systrade.config import make_live_strategy, STARTING_CASH, STRATEGY_NAME
+from systrade.config import make_live_strategies, STARTING_CASH, STRATEGY_NAME
 
 import math
 # ---------------------------
@@ -245,9 +244,9 @@ class MomentumStrategy(Strategy):
 def main():
     setup_logging()
     logger.info("Starting Systrade Live Trading Application...")
-    if not os.getenv("ALPACA_API_KEY"):
-        logger.error("API keys not set. Exiting.")
-        return
+    # Credentials are validated inside AlpacaLiveStockFeed and AlpacaBroker via
+    # config.get_alpaca_credentials(), which also loads .env.  No need to check
+    # here — missing keys will raise ValueError with a clear message on first use.
 
     import time
     max_restarts = 50
@@ -258,10 +257,10 @@ def main():
         try:
             feed = AlpacaLiveStockFeed()
             broker = AlpacaBroker()
-            strategy = make_live_strategy()
+            strategies = make_live_strategies()
 
-            logger.info(f"Using strategy: {STRATEGY_NAME} (restarts={fast_crashes})")
-            engine = Engine(feed=feed, broker=broker, strategy=strategy, cash=STARTING_CASH)
+            logger.info(f"Using strategies: {STRATEGY_NAME} (restarts={fast_crashes})")
+            engine = Engine(feed=feed, broker=broker, strategies=strategies, cash=STARTING_CASH)
             logger.info("Engine initialized. Starting run...")
 
             engine.run()
